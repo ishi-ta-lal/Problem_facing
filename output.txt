@@ -1,0 +1,23 @@
+Python output -  (when confidence threshold is 0.6)
+[{"coordinates": [73.0, 42.0, 144.0, 133.0], "confidence": 0.8560894131660461, "landmarks": [92.0, 73.0, 122.0, 73.0, 108.0, 88.0, 95.0, 105.0, 123.0, 104.0], "class_num": 0.0}]
+
+Android output - (when confidence threshold is 0.00015)
+Output JSON: {"boxes":[{"coordinates":[1388.7501,1579.3632,915.95905,479.79565],"confidence":0.029799461,"landmarks":[458.5514,635.1551,597.4984,617.1178,547.1673,622.82214,480.24338,630.40424,582.73724,620.9589]}]}
+
+Raw output python type - Raw Output from Python (0):
+Type of 'path': <class 'str'>
+Type of 'coordinates': <class 'list'>
+Type of 'confidence': <class 'numpy.ndarray'>
+Type of 'landmarks': <class 'list'>
+Type of 'class_num': <class 'numpy.ndarray'>
+
+Raw output android type - Model output type: float[][][]
+Model output is an array with size 1
+Model output: Array<Array<FloatArray>> of size 1
+
+
+Raw output android (1 box) -
+Raw Model Output: [[[4.168767, 5.10116, 12.342888, 15.66296, 3.2782555E-5, 2.165206, 0.96953213, 4.673319, 1.0932744, 3.6606827, 2.5931005, 2.5592484, 5.0444736, 4.891791, 5.088666, 0.98278177],
+
+Raw output python - 
+[{"coordinates": [73.0, 42.0, 144.0, 133.0], "confidence": 0.8560894131660461, "landmarks": [92.0, 73.0, 122.0, 73.0, 108.0, 88.0, 95.0, 105.0, 123.0, 104.0], "class_num": 0.0}]
