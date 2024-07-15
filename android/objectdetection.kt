@@ -10,11 +10,13 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.util.Log
 import java.io.File
 import java.io.InputStream
 import java.nio.FloatBuffer
 import java.util.Collections
+import kotlin.math.max
 import kotlin.math.min
 
 internal data class Result(
@@ -152,7 +154,7 @@ internal class ObjectDetection(private val context: Context) {
 
         // Resize the bitmap
         val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
-        Log.d("PreprocessImage", "Bitmap resized to 640x640")
+        Log.d("PreprocessImage", "Bitmap resized to 1280x1280")
 
         // Allocate the float buffer
         val floatBuffer = FloatBuffer.allocate(3 * 640 * 640)
@@ -172,12 +174,14 @@ internal class ObjectDetection(private val context: Context) {
             }
         }
 
+
         pixel = 0
         for (i in 0 until 640) {
             for (j in 0 until 640) {
                 val value = intValues[pixel++]
                 val normalizedGreen = (value shr 8 and 0xFF) / 255.0f
                 floatBuffer.put(normalizedGreen)
+
             }
         }
 
@@ -188,15 +192,26 @@ internal class ObjectDetection(private val context: Context) {
                 val normalizedBlue = (value and 0xFF) / 255.0f
                 floatBuffer.put(normalizedBlue)
             }
+
         }
         Log.d("PreprocessImage", "All pixel values processed and added to FloatBuffer")
 
         // Validation and logging
         if (floatBuffer.position() != 3 * 640 * 640) {
-            Log.e("PreprocessImage", "FloatBuffer size mismatch: expected ${3 * 640 * 640}, but got ${floatBuffer.position()}")
+            Log.e("PreprocessImage", "FloatBuffer size mismatch: expected ${3 * 1280 * 1280}, but got ${floatBuffer.position()}")
         } else {
             Log.d("PreprocessImage", "FloatBuffer size is correct: ${floatBuffer.position()}")
         }
+
+        floatBuffer.rewind()
+        Log.d("PreprocessImage", "FloatBuffer rewound to position 0")
+
+        // Log first few values of the float buffer
+        val floatArray = FloatArray(10)
+        floatBuffer.get(floatArray, 0, 10)
+        Log.d("PreprocessImage", "First 10 values of preprocessed image: ${floatArray.joinToString()}")
+
+        Log.d("PreprocessImage", "preprocessImage completed")
 
         return floatBuffer
     }
@@ -214,205 +229,181 @@ internal class ObjectDetection(private val context: Context) {
         val landmarkPaint = Paint().apply {
             style = Paint.Style.FILL
             color = Color.BLUE
-            strokeWidth = 3f
+            strokeWidth = 6f
         }
 
         for (box in boundingBoxes) {
-            val rect = Rect(
-                box.coordinates[0].toInt(),
-                box.coordinates[1].toInt(),
-                box.coordinates[2].toInt(),
-                box.coordinates[3].toInt()
-            )
+            val rect = Rect(box.coordinates[0].toInt(), box.coordinates[1].toInt(), box.coordinates[2].toInt(), box.coordinates[3].toInt())
             canvas.drawRect(rect, paint)
-
-            // Draw landmarks
             for (i in box.landmarks.indices step 2) {
                 val cx = box.landmarks[i]
                 val cy = box.landmarks[i + 1]
-                canvas.drawCircle(cx, cy, 3f, landmarkPaint)
+                canvas.drawCircle(cx, cy, 6f, landmarkPaint)
             }
         }
-        Log.d("DrawBoundingBox", "Drew ${boundingBoxes.size} bounding boxes and landmarks on the bitmap")
+        Log.d("DrawBoundingBox", "Finished drawing bounding boxes")
 
         return outputBitmap
     }
 
-    private fun saveOutputImage(bitmap: Bitmap) {
-        val outputDir = File(context.getExternalFilesDir(null), "output")
-        if (!outputDir.exists()) {
-            outputDir.mkdirs()
-        }
-        val outputFile = File(outputDir, "output_image.png")
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputFile.outputStream())
-        Log.d("SaveOutputImage", "Output image saved to: ${outputFile.absolutePath}")
-    }
+    private fun processOutput(rawOutput: Array<Array<FloatArray>>, originalWidth: Int, originalHeight: Int): BoundingBox? {
+        Log.d("ProcessOutput", "Starting processOutput")
 
-    private fun saveOutputJson(boxes: List<BoundingBox>) {
-        val outputDir = File(context.getExternalFilesDir(null), "output")
-        if (!outputDir.exists()) {
-            outputDir.mkdirs()
-        }
-        val outputFile = File(outputDir, "output_boxes.json")
-        outputFile.bufferedWriter().use { out ->
-            out.write("[\n")
-            boxes.forEachIndexed { index, box ->
-                val boxString = """
-                    {
-                        "coordinates": [${box.coordinates.joinToString()}],
-                        "confidence": ${box.confidence},
-                        "landmarks": [${box.landmarks.joinToString()}],
-                        "classNum": ${box.classNum}
-                    }
-                """.trimIndent()
-                out.write(boxString)
-                if (index != boxes.size - 1) {
-                    out.write(",\n")
-                }
-            }
-            out.write("\n]")
-        }
-        Log.d("SaveOutputJson", "Output boxes saved to: ${outputFile.absolutePath}")
-    }
+        val boxes = ArrayList<BoundingBox>()
+        for (output in rawOutput[0]) {
+            val confidence = output[4]
+            if (confidence > 0.6f) { // Adjust the threshold as necessary
+                val left = output[0]
+                val top = output[1]
+                val right = output[2]
+                val bottom = output[3]
+                val landmarks = output.sliceArray(5..14)
+                val classNum = output[15]
 
-    private fun processOutput(outputArray: Array<Array<FloatArray>>, imageWidth: Int, imageHeight: Int): BoundingBox? {
-        val boundingBoxes = mutableListOf<BoundingBox>()
+                // Convert to RectF format [left, top, right, bottom]
+                val coordinates = floatArrayOf(left, top, right, bottom)
 
-        // Iterate through each output array
-        for (batchArray in outputArray) {
-            // Iterate through each box data in the batch
-            for (boxData in batchArray) {
-                val coordinates = boxData.sliceArray(0..3)
-                val confidence = boxData[4]
-                val landmarks = boxData.sliceArray(5..14)
-                val classNum = boxData[15]
-
-                if (confidence > 0.6) {
-                    val boundingBox = BoundingBox(coordinates, confidence, landmarks, classNum)
-                    boundingBoxes.add(boundingBox)
-                }
+                val box = BoundingBox(coordinates, confidence, landmarks, classNum)
+                boxes.add(box)
             }
         }
 
-        // Apply NMS
-        val nmsBoxes = nms(boundingBoxes, 0.6f, 0.5f)
+        Log.d("ProcessOutput", "Initial bounding boxes count: ${boxes.size}")
 
-        // Sort by confidence and take the box with highest confidence
-        val sortedBoxes = nmsBoxes.sortedByDescending { it.confidence }
-        val bestBox = sortedBoxes.firstOrNull()
+        val nmsThreshold = 0.5f
+        val filteredBoxes = non_max_suppression_face(boxes, 0.6f, nmsThreshold)
+        Log.d("ProcessOutput", "Filtered bounding boxes count: ${filteredBoxes.size}")
 
-        // Scale coordinates of the best box
-        bestBox?.let {
-            val scaledBox = scaleCoordsLandmarks(it, imageWidth, imageHeight)
-            return scaledBox
+        if (filteredBoxes.isNotEmpty()) {
+            val bestBox = filteredBoxes.maxByOrNull { it.confidence }
+            bestBox?.let {
+                Log.d("ProcessOutput", "Best box before scaling: $it")
+                val gain = min(640.0f / originalWidth, 640.0f / originalHeight)
+                val pad = floatArrayOf((640 - originalWidth * gain) / 2, (640 - originalHeight * gain) / 2)
+                scale_coords(bestBox.coordinates, originalWidth, originalHeight, gain, pad)
+                scale_coords_landmarks(bestBox.landmarks, originalWidth, originalHeight, gain, pad)
+                clip_coords(bestBox.coordinates, originalWidth, originalHeight)
+                Log.d("ProcessOutput", "Best box after scaling: $bestBox")
+            }
+            return bestBox
         }
-
         return null
     }
 
-    private fun scaleCoordsLandmarks(bbox: BoundingBox, width: Int, height: Int): BoundingBox {
-        Log.d("ScaleCoordsLandmarks", "Original coordinates: ${bbox.coordinates.joinToString()}")
-        Log.d("ScaleCoordsLandmarks", "Original landmarks: ${bbox.landmarks.joinToString()}")
 
-        val gain = min(640.0f / width, 640.0f / height)
-        val padX = (640 - width * gain) / 2
-        val padY = (640 - height * gain) / 2
 
-        val scaledCoordinates = bbox.coordinates.mapIndexed { index, coord ->
-            val scaledValue = when (index % 2) {
-                0 -> (coord - padX) / gain
-                else -> (coord - padY) / gain
-            }
-            "%.1f".format(scaledValue).toFloat()  // Rounding to one decimal place
-        }.toFloatArray()
+    private fun non_max_suppression_face(boundingBoxes: List<BoundingBox>, confThreshold: Float, iouThreshold: Float): List<BoundingBox> {
+        Log.d("NMS", "Starting non_max_suppression_face with ${boundingBoxes.size} boxes")
 
-        val scaledLandmarks = bbox.landmarks.mapIndexed { index, landmark ->
-            val scaledValue = when (index % 2) {
-                0 -> (landmark - padX) / gain
-                else -> (landmark - padY) / gain
-            }
-            "%.1f".format(scaledValue).toFloat()  // Rounding to one decimal place
-        }.toFloatArray()
+        // Step 1: Filter boxes by confidence threshold
+        val filteredBoxes = boundingBoxes.filter { it.confidence > confThreshold }
+        Log.d("NMS", "After confidence filtering: ${filteredBoxes.size} boxes")
 
-        val roundedConfidence = "%.1f".format(bbox.confidence).toFloat()  // Rounding to one decimal place
-        val roundedClassNum = "%.1f".format(bbox.classNum).toFloat()  // Rounding to one decimal place
+        if (filteredBoxes.isEmpty()) {
+            return emptyList()
+        }
 
-        val scaledBoundingBox = BoundingBox(scaledCoordinates, roundedConfidence, scaledLandmarks, roundedClassNum)
+        // Step 2: Sort boxes by confidence in descending order
+        val sortedBoxes = filteredBoxes.sortedByDescending { it.confidence }.toMutableList()
 
-        Log.d("ScaleCoordsLandmarks", "Scaled coordinates: ${scaledBoundingBox.coordinates.joinToString()}")
-        Log.d("ScaleCoordsLandmarks", "Scaled landmarks: ${scaledBoundingBox.landmarks.joinToString()}")
-
-        return scaledBoundingBox
-    }
-
-    private fun nms(boxes: List<BoundingBox>, confThres: Float, iouThres: Float): List<BoundingBox> {
-        // Convert to the necessary format and filter by confidence
-
-        val filteredBoxes = boxes.filter { it.confidence > confThres }
-            .sortedByDescending { it.confidence }
-
+        // Step 3: Prepare the output list
         val selectedBoxes = mutableListOf<BoundingBox>()
-        val suppressed = BooleanArray(filteredBoxes.size)
 
-        for (i in filteredBoxes.indices) {
-            if (suppressed[i]) continue
-            val boxA = filteredBoxes[i]
-            selectedBoxes.add(boxA)
+        // Logging coordinates before NMS
+        Log.d("NMS", "Before NMS: ${sortedBoxes.map { it.coordinates.toList() }}")
 
-            for (j in i + 1 until filteredBoxes.size) {
-                if (suppressed[j]) continue
-                val boxB = filteredBoxes[j]
+        // Step 4: Apply Non-Maximum Suppression (NMS)
+        while (sortedBoxes.isNotEmpty()) {
+            // Select the box with the highest confidence
+            val bestBox = sortedBoxes.removeAt(0)
+            selectedBoxes.add(bestBox)
 
-                // Calculate IoU
-                val iou = boxIou(xywh2xyxy(boxA.coordinates), xywh2xyxy(boxB.coordinates))
-                if (iou > iouThres) {
-                    suppressed[j] = true
-                }
-            }
+            // Remove boxes that have high IoU with the best box
+            val bestBoxRect = floatArrayToRectF(bestBox.coordinates)
+            sortedBoxes.removeAll { box -> calculateIoU(bestBoxRect, floatArrayToRectF(box.coordinates)) > iouThreshold }
         }
 
-        // Logging for debugging
-        Log.d("NMS", "After NMS:")
-        selectedBoxes.forEach { box ->
-            Log.d("NMS", "Coordinates: ${box.coordinates.joinToString()}, Confidence: ${box.confidence}")
+        // Logging coordinates after NMS
+        Log.d("NMS", "After NMS: ${selectedBoxes.take(1).map { it.coordinates.toList() }}")
+
+        Log.d("NMS", "Finished non_max_suppression_face with ${selectedBoxes.size} selected boxes")
+
+        // Step 5: Return only the box with the highest confidence
+        return selectedBoxes.take(1)
+    }
+
+
+    private fun floatArrayToRectF(array: FloatArray): RectF {
+        return RectF(array[0], array[1], array[2], array[3])
+    }
+
+    // Convert RectF to FloatArray
+    private fun rectFToFloatArray(rect: RectF): FloatArray {
+        return floatArrayOf(rect.left, rect.top, rect.right, rect.bottom)
+    }
+
+
+
+    private fun calculateIoU(boxA: RectF, boxB: RectF): Float {
+        val intersection = RectF(
+            max(boxA.left, boxB.left),
+            max(boxA.top, boxB.top),
+            min(boxA.right, boxB.right),
+            min(boxA.bottom, boxB.bottom)
+        )
+
+        val intersectionArea = if (intersection.left < intersection.right && intersection.top < intersection.bottom) {
+            (intersection.right - intersection.left) * (intersection.bottom - intersection.top)
+        } else {
+            0f
         }
 
-        return selectedBoxes
+        val areaA = (boxA.right - boxA.left) * (boxA.bottom - boxA.top)
+        val areaB = (boxB.right - boxB.left) * (boxB.bottom - boxB.top)
+        val unionArea = areaA + areaB - intersectionArea
+
+        return if (unionArea > 0) intersectionArea / unionArea else 0f
     }
 
-
-    private fun xywh2xyxy(box: FloatArray): FloatArray {
-        val x = box[0]
-        val y = box[1]
-        val w = box[2]
-        val h = box[3]
-        return floatArrayOf(
-            x - w / 2, // x1
-            y - h / 2, // y1
-            x + w / 2, // x2
-            y + h / 2  // y2
-        )
+    private fun scale_coords(coords: FloatArray, originalWidth: Int, originalHeight: Int, gain: Float, pad: FloatArray) {
+        coords[0] = (coords[0] - pad[0]) / gain
+        coords[1] = (coords[1] - pad[1]) / gain
+        coords[2] = (coords[2] - pad[0]) / gain
+        coords[3] = (coords[3] - pad[1]) / gain
     }
 
-    private fun boxArea(box: FloatArray): Float {
-        val width = box[2] - box[0]
-        val height = box[3] - box[1]
-        return width * height
+    private fun scale_coords_landmarks(landmarks: FloatArray, originalWidth: Int, originalHeight: Int, gain: Float, pad: FloatArray) {
+        for (i in landmarks.indices step 2) {
+            landmarks[i] = (landmarks[i] - pad[0]) / gain
+            landmarks[i + 1] = (landmarks[i + 1] - pad[1]) / gain
+        }
     }
 
-    private fun boxIou(box1: FloatArray, box2: FloatArray): Float {
-        val inter = floatArrayOf(
-            maxOf(box1[0], box2[0]), // x1
-            maxOf(box1[1], box2[1]), // y1
-            minOf(box1[2], box2[2]), // x2
-            minOf(box1[3], box2[3])  // y2
-        )
-
-        val interArea = maxOf(inter[2] - inter[0], 0f) * maxOf(inter[3] - inter[1], 0f)
-        val box1Area = boxArea(box1)
-        val box2Area = boxArea(box2)
-
-        return interArea / (box1Area + box2Area - interArea)
+    private fun clip_coords(coords: FloatArray, originalWidth: Int, originalHeight: Int) {
+        coords[0] = coords[0].coerceIn(0f, originalWidth.toFloat() - 1)
+        coords[1] = coords[1].coerceIn(0f, originalHeight.toFloat() - 1)
+        coords[2] = coords[2].coerceIn(0f, originalWidth.toFloat() - 1)
+        coords[3] = coords[3].coerceIn(0f, originalHeight.toFloat() - 1)
     }
 
+    private fun saveOutputImage(outputBitmap: Bitmap) {
+        val outputDir = File(context.filesDir, "images")
+        if (!outputDir.exists()) {
+            outputDir.mkdirs()
+        }
+        val outputFile = File(outputDir, "output_image.jpg")
+        outputBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputFile.outputStream())
+        Log.d("ObjectDetection", "Saved output image to ${outputFile.absolutePath}")
+    }
+
+    private fun saveOutputJson(boundingBoxes: List<BoundingBox>) {
+        val outputDir = File(context.filesDir, "json")
+        if (!outputDir.exists()) {
+            outputDir.mkdirs()
+        }
+        val outputFile = File(outputDir, "output.json")
+        val json = boundingBoxes.joinToString(separator = ",\n", prefix = "[\n", postfix = "\n]") { it.toString() }
+        outputFile.writeText(json)
+        Log.d("ObjectDetection", "Saved output JSON to ${outputFile.absolutePath}")
+    }
 }
